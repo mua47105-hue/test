@@ -437,7 +437,7 @@ else:
         _task_cfg.setdefault("api_key", "placeholder")
         _task_cfg.setdefault("model", _aux_model)
 
-    print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback catalog (6 models, deepseek-v4-flash-free default).")
+    print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback catalog (7 models, deepseek-v4-flash-free default).")
 
 custom_base = os.environ.get("CUSTOM_BASE_URL", "").strip()
 if custom_base and model_name:
