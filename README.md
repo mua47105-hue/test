@@ -36,8 +36,15 @@ secrets:
 
 **Self-hosted Hermes AI agent gateway for Hugging Face Spaces.** HuggingMes runs [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent) on HuggingFace Spaces, giving you a 24/7 personal AI assistant with a management dashboard, persistent HF Dataset backup, and direct outbound connectivity. HuggingMes directly wires the startup providers listed below, and it can also use Hermes providers configured through `hermes model` or `config.yaml`.
 
+> 🧭 **Contributing / continuing work on this project?** Read
+> **[`DEVELOPER_NOTES.md`](DEVELOPER_NOTES.md) first.** It documents the boot
+> sequence, the hard-won invariants (the s6 gateway race, the `.env` key
+> poison, the Zen model wiring), and the "do not do this" rules that will
+> silently break the Space if ignored.
+
 ## Table of Contents
 
+- [🧭 Developer Notes](#-developer-notes)
 - [✨ Features](#-features)
 - [🎥 Video Tutorial](#-video-tutorial)
 - [🚀 Quick Start](#-quick-start)
@@ -293,6 +300,15 @@ Provider API keys and tokens are read from the environment at boot — set them 
 - **API (`/v1/*`)**: Forwarded OpenAI-compatible agent API.
 - **Health Check (`/health`)**: Readiness probe for the platform.
 - **Sync Engine**: Python background task for HF Dataset persistence.
+
+## 🧭 Developer Notes
+
+If you are maintaining, forking, or extending this project, read
+**[`DEVELOPER_NOTES.md`](DEVELOPER_NOTES.md)**. It is the developer-to-developer
+handoff: the exact boot sequence, the invariants that must stay true (the s6
+gateway race, the persistent `.env` key poison, the Zen model wiring), the
+per-model context windows and reasoning-effort ceilings, and the list of things
+that will silently break the Space if changed.
 
 ## 🌐 Outbound Connectivity
 
