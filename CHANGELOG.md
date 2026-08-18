@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.5-hardened] - 2026-08-18
+
+### Added / Fixed
+
+- **Full OpenCode Zen model catalog.** When no model secrets are set,
+  config-gen now writes the complete Zen integration, not just the default
+  model: a `custom_providers` list (the legacy format the context resolver
+  reads at step 0c) with explicit per-model `context_length` for all six
+  free models (`deepseek-v4-flash-free` 256000, `nemotron-3-ultra-free`/
+  `mimo-v2.5-free`/`big-pickle` 128000, `hy3-free`/`laguna-s-2.1-free`
+  64000), plus `discover_models: false`, `api_mode: chat_completions`, and
+  the `extra_headers` (empty `Authorization` + OpenCode `User-Agent`) in
+  both the `providers.custom` (keyed) and `custom_providers` (list) blocks.
+  Every model has an explicit context window, so a `/model` switch never
+  falls through to endpoint probing.
+- **`MALLOC_ARENA_MAX=2`** in the image ENV to reduce glibc malloc-arena
+  fragmentation in the multi-threaded gateway (lowers steady-state RSS).
+- **Bytecode cache cleared at build time** after the source patches so the
+  patched `model_metadata.py` is guaranteed to recompile on first import.
+- **`/status` now reports memory** (`memory` object: cgroup limit/usage,
+  host MemTotal/MemAvailable, and top processes by RSS) for diagnosing the
+  HF out-of-memory banner.
+
+Verified locally: probe-suppression trap test passes (0 HTTP requests),
+`hermes -z` PONG test succeeds for `deepseek-v4-flash-free` and
+`nemotron-3-ultra-free`.
+
 ## [2.0.4-hardened] - 2026-08-18
 
 ### Fixed

@@ -296,15 +296,32 @@ else:
     # No model configured via env (HF secrets unset) — inject the Zen
     # fallback so the gateway always has a usable model route and the
     # api_server platform can serve requests out of the box. Values match
-    # config.zen.example.yaml (verified 2026-08-17). Env wins whenever
-    # the operator later sets LLM_MODEL/HERMES_MODEL.
+    # config.zen.example.yaml + the OpenCode Zen integration reference.
+    # Env wins whenever the operator later sets LLM_MODEL/HERMES_MODEL.
+    zen_url = "https://opencode.ai/zen/v1"
+    zen_ua = "opencode/1.18.18 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
+    zen_models = {
+        # Explicit context_length for EVERY model: the resolver's step 0c
+        # (custom_providers[i].models.<model>.context_length) short-circuits
+        # before any endpoint probing, so a /model switch never burns the
+        # Zen rate-limit budget. Values per the integration reference.
+        "deepseek-v4-flash-free": 256000,
+        "nemotron-3-ultra-free": 128000,
+        "mimo-v2.5-free": 128000,
+        "hy3-free": 64000,
+        "laguna-s-2.1-free": 64000,
+        "big-pickle": 128000,
+    }
     model["default"] = "deepseek-v4-flash-free"
     model["provider"] = "custom"
-    model["base_url"] = "https://opencode.ai/zen/v1"
+    model["base_url"] = zen_url
     model["api_key"] = "placeholder"          # Zen needs no auth; non-empty satisfies Hermes
-    model["context_length"] = 131072          # explicit — no remote probing
+    model["context_length"] = zen_models["deepseek-v4-flash-free"]
     model["max_tokens"] = 8192
     model["discover_models"] = False
+
+    # Newer keyed schema — this is where the HTTP client lifts the headers
+    # (runtime_provider._lift_extra_headers).
     providers = config.setdefault("providers", {})
     if not isinstance(providers, dict):
         providers = {}
@@ -313,13 +330,30 @@ else:
     if not isinstance(custom_prov, dict):
         custom_prov = {}
         providers["custom"] = custom_prov
-    custom_prov["base_url"] = "https://opencode.ai/zen/v1"
+    custom_prov["base_url"] = zen_url
     custom_prov["api_key"] = "placeholder"
+    custom_prov["default_model"] = "deepseek-v4-flash-free"
     custom_prov["extra_headers"] = {
-        "Authorization": "",
-        "User-Agent": "opencode/1.18.18 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
+        "Authorization": "",      # empty → strip the Bearer header Zen rejects (401)
+        "User-Agent": zen_ua,     # official OpenCode client identity (Tier-1 models)
     }
-    print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback model (deepseek-v4-flash-free).")
+
+    # Legacy list format the per-model context resolver reads directly
+    # (agent/model_metadata.py step 0c via get_custom_provider_context_length).
+    config["custom_providers"] = [{
+        "name": "opencode-zen-free",
+        "base_url": zen_url,
+        "api_key": "placeholder",
+        "api_mode": "chat_completions",
+        "model": "deepseek-v4-flash-free",
+        "discover_models": False,
+        "models": {m: {"context_length": ctx} for m, ctx in zen_models.items()},
+        "extra_headers": {
+            "Authorization": "",
+            "User-Agent": zen_ua,
+        },
+    }]
+    print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback catalog (6 models, deepseek-v4-flash-free default).")
 
 custom_base = os.environ.get("CUSTOM_BASE_URL", "").strip()
 if custom_base and model_name:

@@ -421,6 +421,65 @@ function formatUptime(ms) {
   return `${minutes}m`;
 }
 
+function readFileTrim(path) {
+  try {
+    return fs.readFileSync(path, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function readMemoryInfo() {
+  const info = { nodeRssBytes: process.memoryUsage().rss };
+
+  // Container cgroup limit + usage (the number HF's OOM banner keys off).
+  const cur = readFileTrim("/sys/fs/cgroup/memory.current");
+  const max = readFileTrim("/sys/fs/cgroup/memory.max");
+  if (cur && max && max !== "max") {
+    info.cgroupLimitBytes = Number(max);
+    info.cgroupUsageBytes = Number(cur);
+  } else {
+    const v1cur = readFileTrim("/sys/fs/cgroup/memory/memory.usage_in_bytes");
+    const v1max = readFileTrim("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+    if (v1cur && v1max) {
+      info.cgroupLimitBytes = Number(v1max);
+      info.cgroupUsageBytes = Number(v1cur);
+    }
+  }
+
+  // Host view from /proc/meminfo (the shared HF node — differs from cgroup).
+  const meminfo = readFileTrim("/proc/meminfo");
+  const mt = /MemTotal:\s+(\d+)/.exec(meminfo);
+  const ma = /MemAvailable:\s+(\d+)/.exec(meminfo);
+  if (mt) info.hostMemTotalKiB = Number(mt[1]);
+  if (ma) info.hostMemAvailableKiB = Number(ma[1]);
+
+  // Top consumers by RSS, for diagnosing what is actually using memory.
+  try {
+    const procs = [];
+    for (const name of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) continue;
+      try {
+        const status = fs.readFileSync(`/proc/${name}/status`, "utf8");
+        const rss = /VmRSS:\s+(\d+)/.exec(status);
+        const cmd = fs
+          .readFileSync(`/proc/${name}/cmdline`, "utf8")
+          .replace(/\0/g, " ")
+          .trim();
+        if (rss && cmd) procs.push({ rssKiB: Number(rss[1]), cmd: cmd.slice(0, 90) });
+      } catch {
+        /* best-effort */
+      }
+    }
+    procs.sort((a, b) => b.rssKiB - a.rssKiB);
+    info.topProcesses = procs.slice(0, 6);
+  } catch {
+    /* best-effort */
+  }
+
+  return info;
+}
+
 async function statusPayload() {
   const [gateway, dashboard] = await Promise.all([
     canConnect(GATEWAY_PORT, GATEWAY_HOST, 2000),
@@ -443,6 +502,7 @@ async function statusPayload() {
     gateway,
     dashboard,
     authConfigured: !!API_SERVER_KEY,
+    memory: readMemoryInfo(),
     ports: {
       public: PORT,
       gateway: GATEWAY_PORT,

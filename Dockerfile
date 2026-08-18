@@ -164,8 +164,12 @@ PY
 # Use a+w (not u+w): this RUN executes as root during build, but HF Spaces
 # runs the container as an arbitrary non-root UID at runtime — u+w only
 # grants write to the file's owner (root), which the runtime UID isn't.
+# Also clear any bytecode cache so the patched sources above are recompiled
+# from scratch at first import (the self-patcher rewrites .py files too).
 RUN find /opt/hermes -type d -exec chmod a+rwx {} + 2>/dev/null || true \
-    && find /opt/hermes -name "*.py" -exec chmod a+w {} + 2>/dev/null || true
+    && find /opt/hermes -name "*.py" -exec chmod a+w {} + 2>/dev/null || true \
+    && find /opt/hermes -name "*.pyc" -delete 2>/dev/null || true \
+    && find /opt/hermes -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Ensure hermes CLI is discoverable in ALL shell types (login, interactive,
 # non-interactive). /etc/profile.d/ is sourced by login shells after /etc/profile
@@ -178,6 +182,7 @@ ENV HERMES_HOME=/opt/data \
     HERMES_AGENT_VERSION=${HERMES_AGENT_VERSION} \
     HERMES_GATEWAY_NO_SUPERVISE=1 \
     PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox --disable-gpu"
 
