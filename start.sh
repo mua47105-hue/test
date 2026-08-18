@@ -43,6 +43,15 @@ PY
   fi
 fi
 
+# Publish the key into HERMES_HOME/.env as well (idempotent). s6-spawned
+# processes don't inherit start.sh's exported env, so a gateway handed off
+# to the s6 supervisor would otherwise never see API_SERVER_KEY and the
+# api_server platform would never open the 8642 readiness port.
+if ! grep -q "^API_SERVER_KEY=" "$HERMES_HOME/.env" 2>/dev/null; then
+  printf 'API_SERVER_KEY=%s\n' "$API_SERVER_KEY" >> "$HERMES_HOME/.env"
+  chmod 600 "$HERMES_HOME/.env"
+fi
+
 # ── Setup directories ──
 mkdir -p "$HERMES_HOME"/{cron,sessions,logs,hooks,memories,skills,skins,plans,workspace,home,plugins}
 
