@@ -169,7 +169,8 @@ ENV HERMES_HOME=/opt/data \
     HUGGINGMES_APP_DIR=/opt/huggingmes \
     HERMES_AGENT_VERSION=${HERMES_AGENT_VERSION} \
     PYTHONUNBUFFERED=1 \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
+    PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox --disable-gpu"
 
 EXPOSE 7861
 

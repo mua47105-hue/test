@@ -636,11 +636,12 @@ start_background_sync_once() {
   SYNC_LOOP_PID=$!
 }
 
-start_dashboard_once
+# start_dashboard_once  # DISABLED TO SAVE RAM — the image's own s6 dashboard
+# service already binds DASHBOARD_PORT; Discord/API remain the access paths.
 
 # ── Gateway restart loop ──
 GATEWAY_RESTART_DELAY="${GATEWAY_RESTART_DELAY:-5}"
-GATEWAY_MAX_RESTARTS="${GATEWAY_MAX_RESTARTS:-0}"
+GATEWAY_MAX_RESTARTS="${GATEWAY_MAX_RESTARTS:-3}"
 GATEWAY_RESTART_COUNT=0
 GATEWAY_READY_TIMEOUT="${GATEWAY_READY_TIMEOUT:-120}"
 
@@ -660,12 +661,15 @@ while true; do
   fi
 
   echo "Launching Hermes gateway..."
-  # s6-supervise interception would orphan the gateway from start.sh's env
-  # (losing the exported API_SERVER_KEY above, so the API health port never
-  # opens and the readiness loop below times out). HERMES_GATEWAY_NO_SUPERVISE=1
-  # keeps the gateway as our foreground child: it inherits start.sh's env and
-  # the restart loop below supervises it.
-  (HERMES_GATEWAY_NO_SUPERVISE=1 hermes gateway run 2>&1 | tee -a "$HERMES_HOME/logs/gateway.log") &
+  # Launch the gateway via its runtime module directly (python3 -m
+  # gateway.run), bypassing the `hermes` CLI: in this container image the CLI
+  # intercepts `gateway run` and hands the gateway to s6-supervise, which
+  # drops start.sh's exported env — so API_SERVER_KEY never reaches the
+  # api_server platform and the 8642 readiness port never opens. Running the
+  # module directly keeps the gateway a plain foreground child of start.sh
+  # (it inherits API_SERVER_KEY; the restart loop below supervises it).
+  GATEWAY_PY="$(head -1 "$(command -v hermes)" | sed 's/^#!//')"
+  (cd /opt/hermes && "$GATEWAY_PY" -m gateway.run 2>&1 | tee -a "$HERMES_HOME/logs/gateway.log") &
   GATEWAY_PID=$!
 
   ready=false

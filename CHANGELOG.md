@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2-hardened] - 2026-08-18
+
+### Fixed
+
+- Gateway is now launched via its runtime module directly (`python3 -m
+  gateway.run` with the venv interpreter), bypassing the `hermes` CLI layer.
+  The container image intercepts `hermes gateway run` and hands the gateway
+  to s6-supervise, which drops start.sh's exported env — so the api_server
+  platform never opened the 8642 readiness port and the startup wait loop
+  exited 1 about two minutes after boot. The direct module launch keeps the
+  gateway a plain foreground child of start.sh (inherits `API_SERVER_KEY`;
+  the restart loop still supervises it).
+- `API_SERVER_KEY` is also published into `HERMES_HOME/.env` (idempotent,
+  mode 600) so any gateway process — including an s6-spawned one — can find
+  it.
+- Dashboard auto-start disabled (`start_dashboard_once` commented out) to
+  save roughly 1 GB of RAM and avoid the 9119 port conflict with the base
+  image's own s6 dashboard service. Discord/API remain the access paths.
+- Gateway restart cap default raised to 3 (`GATEWAY_MAX_RESTARTS=3`,
+  overridable) so a genuine crash loop cannot churn forever in-container.
+- `PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox
+  --disable-gpu"` added to the image ENV so headless Chromium uses disk
+  instead of the 64 MB `/dev/shm` and cannot crash the gateway on browse
+  actions.
+
 ## [2.0.1-hardened] - 2026-08-17
 
 ### Fixed
