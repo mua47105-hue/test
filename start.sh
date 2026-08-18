@@ -43,6 +43,20 @@ PY
   fi
 fi
 
+# The api_server platform refuses to start with a key shorter than 16
+# chars (gateway/config.py has_usable_secret guard) — a short
+# GATEWAY_TOKEN secret would leave port 8642 closed and trip the
+# readiness loop. Enforce a strong key for this boot.
+if [ "${#API_SERVER_KEY}" -lt 16 ]; then
+  echo "WARNING: API_SERVER_KEY/GATEWAY_TOKEN is only ${#API_SERVER_KEY} chars; api_server needs at least 16. Generating a strong key for this boot (set a GATEWAY_TOKEN of 16+ chars to make it stable)."
+  API_SERVER_KEY="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)"
+  export API_SERVER_KEY
+fi
+
 # ── Publish API-server env into HERMES_HOME/.env (force) ──
 # The gateway loads $HERMES_HOME/.env with override=True
 # (hermes_cli/env_loader.py), so a stale API_SERVER_KEY left in this
@@ -254,23 +268,58 @@ import yaml
 home = Path(os.environ["HERMES_HOME"])
 path = home / "config.yaml"
 try:
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-except FileNotFoundError:
+    config = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+    if not isinstance(config, dict):
+        config = {}
+except Exception:
+    # An old/corrupt config.yaml must never crash config-gen (which would
+    # kill start.sh under set -e). Fall back to a fresh config.
     config = {}
 
 model_name = os.environ.get("MODEL_FOR_CONFIG", "").strip()
 provider_name = os.environ.get("PROVIDER_FOR_CONFIG", "").strip()
 
+# Defensive: coerce model/platforms to dicts before merging.
+if not isinstance(config.get("model"), dict):
+    config["model"] = {}
+if not isinstance(config.get("platforms"), dict):
+    config["platforms"] = {}
+
+model = config["model"]
 if model_name:
-    model = config.setdefault("model", {})
     model["default"] = model_name                          # always from env — deploy-time setting
     if provider_name and provider_name != "auto":
         model["provider"] = provider_name                  # explicit provider (openrouter, huggingface, custom…)
     else:
         model.pop("provider", None)                        # let Hermes infer from model-name prefix
 else:
-    model = config.get("model", {})
-    print("No LLM_MODEL/HERMES_MODEL set; leaving Hermes model config unchanged.")
+    # No model configured via env (HF secrets unset) — inject the Zen
+    # fallback so the gateway always has a usable model route and the
+    # api_server platform can serve requests out of the box. Values match
+    # config.zen.example.yaml (verified 2026-08-17). Env wins whenever
+    # the operator later sets LLM_MODEL/HERMES_MODEL.
+    model["default"] = "deepseek-v4-flash-free"
+    model["provider"] = "custom"
+    model["base_url"] = "https://opencode.ai/zen/v1"
+    model["api_key"] = "placeholder"          # Zen needs no auth; non-empty satisfies Hermes
+    model["context_length"] = 131072          # explicit — no remote probing
+    model["max_tokens"] = 8192
+    model["discover_models"] = False
+    providers = config.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        config["providers"] = providers
+    custom_prov = providers.setdefault("custom", {})
+    if not isinstance(custom_prov, dict):
+        custom_prov = {}
+        providers["custom"] = custom_prov
+    custom_prov["base_url"] = "https://opencode.ai/zen/v1"
+    custom_prov["api_key"] = "placeholder"
+    custom_prov["extra_headers"] = {
+        "Authorization": "",
+        "User-Agent": "opencode/1.18.18 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
+    }
+    print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback model (deepseek-v4-flash-free).")
 
 custom_base = os.environ.get("CUSTOM_BASE_URL", "").strip()
 if custom_base and model_name:
@@ -299,7 +348,28 @@ config.setdefault("compression", {}).setdefault("enabled", True)
 config.setdefault("display", {}).setdefault("background_process_notifications", os.environ.get("HERMES_BACKGROUND_NOTIFICATIONS", "result"))
 config.setdefault("security", {}).setdefault("redact_secrets", True)
 
-platforms = config.setdefault("platforms", {})
+platforms = config["platforms"]
+
+# Force api_server enabled: it is the 8642 readiness port start.sh's boot
+# loop waits for. A stale `platforms.api_server.enabled: false` in an old
+# config.yaml sets the loader's _enabled_explicit marker, which keeps the
+# platform disabled even with a valid API_SERVER_KEY (gateway/config.py).
+# Overwrite the block so the port always opens.
+api_server = platforms.setdefault("api_server", {})
+if not isinstance(api_server, dict):
+    api_server = {}
+    platforms["api_server"] = api_server
+api_server["enabled"] = True
+api_extra = api_server.setdefault("extra", {})
+if not isinstance(api_extra, dict):
+    api_extra = {}
+    api_server["extra"] = api_extra
+api_extra["key"] = os.environ["API_SERVER_KEY"]
+api_extra["host"] = os.environ.get("API_SERVER_HOST", "127.0.0.1")
+try:
+    api_extra["port"] = int(os.environ.get("API_SERVER_PORT", "8642"))
+except ValueError:
+    pass
 
 if os.environ.get("DISCORD_BOT_TOKEN"):
     discord = platforms.setdefault("discord", {})
@@ -666,7 +736,9 @@ start_dashboard_once() {
     return 0
   fi
   echo "Launching Hermes dashboard on 127.0.0.1:${DASHBOARD_PORT}..."
-  (hermes dashboard --host 127.0.0.1 --insecure 2>&1 | tee -a "$HERMES_HOME/logs/dashboard.log") &
+  # Loopback bind: the dashboard's auth gate only engages on non-loopback
+  # binds, and the health-server already gates /app/ with GATEWAY_TOKEN.
+  (hermes dashboard --host 127.0.0.1 --port "$DASHBOARD_PORT" --no-open 2>&1 | tee -a "$HERMES_HOME/logs/dashboard.log") &
   DASHBOARD_PID=$!
 }
 
@@ -680,8 +752,10 @@ start_background_sync_once() {
   SYNC_LOOP_PID=$!
 }
 
-# start_dashboard_once  # DISABLED TO SAVE RAM — the image's own s6 dashboard
-# service already binds DASHBOARD_PORT; Discord/API remain the access paths.
+# Serve the Hermes dashboard on loopback 9119 so the health-server's
+# /app/ route has a backend (the base image's s6 dashboard service stays
+# down — HERMES_DASHBOARD is unset — so there is no port conflict).
+start_dashboard_once
 
 # ── Reclaim gateway ownership from the base image's s6 lifecycle ──
 # 02-reconcile-profiles auto-starts an s6-supervised gateway-default slot

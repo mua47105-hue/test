@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.4-hardened] - 2026-08-18
+
+### Fixed
+
+- **api_server now always binds 8642 even on a stale volume.** Two new
+  blockers surfaced on the live Space after 2.0.3 (root-caused from the
+  runtime logs + base-image source):
+  - An old `config.yaml` (the Space volume predates config version 12)
+    can carry `platforms.api_server.enabled: false`, which sets the
+    loader's `_enabled_explicit` marker and keeps the platform disabled
+    even with a valid `API_SERVER_KEY` (gateway/config.py). `start.sh`
+    config-gen now force-overwrites the api_server block (`enabled:
+    true` + key/host/port in `extra`) instead of setdefault-merge, and
+    defensively coerces `model`/`platforms` to dicts so an old or
+    corrupt YAML can never crash config-gen under `set -e`.
+  - A short `GATEWAY_TOKEN` (< 16 chars) fails the api_server platform's
+    `has_usable_secret` guard, leaving 8642 closed. `start.sh` now
+    enforces a strong key for the boot (warns to fix GATEWAY_TOKEN), and
+    the health-server accepts either `API_SERVER_KEY` or `GATEWAY_TOKEN`
+    for dashboard/API auth so the user's login keeps working.
+- **Zen fallback model injected when no model secrets are set.** The
+  Space had no `LLM_MODEL`/`CUSTOM_BASE_URL` secrets, so the gateway had
+  no model route. When env is unset, config-gen now writes the Zen
+  fallback (`deepseek-v4-flash-free` via `https://opencode.ai/zen/v1`,
+  placeholder key, explicit `context_length: 131072`,
+  `discover_models: false`, `extra_headers` per `config.zen.example.yaml`)
+  so the gateway serves out of the box; env still wins when set later.
+- **Dashboard restored for `/app/`.** `start_dashboard_once` is re-enabled
+  (loopback bind on 9119 via `hermes dashboard --host 127.0.0.1 --no-open`)
+  so the health-server's `/app/` route has a backend — the base image's
+  s6 dashboard service stays down (HERMES_DASHBOARD unset), so there is no
+  port conflict. Previously `/app/` returned `forward_error connect
+  ECONNREFUSED 127.0.0.1:9119`.
+
+Verified locally against a poisoned volume (ancient `config.yaml` with
+`api_server.enabled: false`, empty `API_SERVER_KEY` in `.env`,
+`gateway_state.json=running`, short GATEWAY_TOKEN, no model env): boots
+healthy, `/health` → `gateway:true`, 8642 bound, `/app/` serves the Hermes
+SPA (200 with token, 302 without), and a restart cycle stays healthy.
+
 ## [2.0.3-hardened] - 2026-08-18
 
 ### Fixed

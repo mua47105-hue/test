@@ -12,6 +12,12 @@ const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 9119);
 const GATEWAY_HOST = "127.0.0.1";
 const startTime = Date.now();
 const API_SERVER_KEY = process.env.API_SERVER_KEY || "";
+// GATEWAY_TOKEN is accepted as an alias for API_SERVER_KEY: start.sh uses
+// GATEWAY_TOKEN as the key when it is long enough, but generates a strong
+// API_SERVER_KEY when the configured token is too short for the api_server
+// platform (min 16 chars). Accepting both keeps the user's login stable in
+// that case.
+const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN || "";
 const DEV_MODE = (process.env.DEV_MODE || "true").toLowerCase() !== "false";
 const APP_BASE = "/app";
 const LOGIN_PATH = "/login";
@@ -193,10 +199,17 @@ function getBearerToken(req) {
   return match ? match[1] : "";
 }
 
+function matchesCredential(value) {
+  if (!value) return false;
+  return [API_SERVER_KEY, GATEWAY_TOKEN].some((cred) =>
+    cred && timingSafeEqualString(value, cred),
+  );
+}
+
 function isAuthorized(req) {
-  if (!API_SERVER_KEY) return true;
+  if (!API_SERVER_KEY && !GATEWAY_TOKEN) return true;
   return (
-    timingSafeEqualString(getBearerToken(req), API_SERVER_KEY) ||
+    matchesCredential(getBearerToken(req)) ||
     timingSafeEqualString(
       parseCookies(req)[SESSION_COOKIE],
       expectedSessionValue(),
@@ -288,7 +301,7 @@ async function handleLogin(req, res, parsed) {
     parsed.searchParams.get("next") || `${APP_BASE}/`,
   );
 
-  if (!API_SERVER_KEY) {
+  if (!API_SERVER_KEY && !GATEWAY_TOKEN) {
     redirect(res, nextPath);
     return;
   }
@@ -314,7 +327,7 @@ async function handleLogin(req, res, parsed) {
     const submittedToken = params.get("token") || "";
     const submittedNext = sanitizeNext(params.get("next") || nextPath);
 
-    if (!timingSafeEqualString(submittedToken, API_SERVER_KEY)) {
+    if (!matchesCredential(submittedToken)) {
       res.writeHead(401, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
