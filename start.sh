@@ -304,14 +304,28 @@ else:
         # Explicit context_length for EVERY model: the resolver's step 0c
         # (custom_providers[i].models.<model>.context_length) short-circuits
         # before any endpoint probing, so a /model switch never burns the
-        # Zen rate-limit budget. Values per the integration reference.
-        "deepseek-v4-flash-free": 256000,
+        # Zen rate-limit budget. Windows per the operator (2026-08-18); the
+        # Zen catalog now has 7 free models (nemotron-3.5-lightning-free added).
+        "deepseek-v4-flash-free": 200000,
+        "mimo-v2.5-free": 200000,
+        "hy3-free": 190000,
+        "laguna-s-2.1-free": 256000,
+        "nemotron-3.5-lightning-free": 262144,
         "nemotron-3-ultra-free": 128000,
-        "mimo-v2.5-free": 128000,
-        "hy3-free": 64000,
-        "laguna-s-2.1-free": 64000,
         "big-pickle": 128000,
     }
+    # Reasoning-effort support, per the OpenCode UI (operator-verified) and
+    # confirmed against the live endpoint: deepseek exposes default/low/high/
+    # max; hy3 and laguna expose default/medium/high (NO "max"); mimo and the
+    # nemotron models expose no effort levels. Map each reasoning model to its
+    # MAXIMUM supported level so Hermes never sends a level Zen rejects
+    # (hy3/laguna reject "max"; everyone rejects "ultra").
+    zen_effort = {
+        "deepseek-v4-flash-free": "max",
+        "hy3-free": "high",
+        "laguna-s-2.1-free": "high",
+    }
+    zen_vision = {"mimo-v2.5-free"}
     model["default"] = "deepseek-v4-flash-free"
     model["provider"] = "custom"
     model["base_url"] = zen_url
@@ -362,6 +376,43 @@ else:
             "User-Agent": zen_ua,
         },
     }]
+
+    # Per-model capability + context overrides. Zen model ids are unknown to
+    # models.dev, which defaults unknown models to tools-on / vision-off /
+    # reasoning-off — so agent.reasoning_effort would be a no-op (models run
+    # at Zen's default effort) and images would never attach to mimo.
+    mo = config.setdefault("model_overrides", {})
+    if not isinstance(mo, dict):
+        mo = {}
+        config["model_overrides"] = mo
+    mo_custom = mo.setdefault("custom", {})
+    if not isinstance(mo_custom, dict):
+        mo_custom = {}
+        mo["custom"] = mo_custom
+    for _m, _ctx in zen_models.items():
+        _e = mo_custom.setdefault(_m, {})
+        if not isinstance(_e, dict):
+            _e = {}
+            mo_custom[_m] = _e
+        _e["context_window"] = _ctx
+        _e.setdefault("supports_tools", True)
+        _e["supports_reasoning"] = _m in zen_effort
+        _e["supports_vision"] = _m in zen_vision
+
+    # Reasoning effort: a safe global default ("high") plus explicit per-model
+    # levels so deepseek gets "max" while hy3/laguna stay at their ceiling of
+    # "high". Global default overridable via HERMES_REASONING_EFFORT.
+    _agent_cfg = config.setdefault("agent", {})
+    if not isinstance(_agent_cfg, dict):
+        _agent_cfg = {}
+        config["agent"] = _agent_cfg
+    _agent_cfg["reasoning_effort"] = os.environ.get("HERMES_REASONING_EFFORT", "high").strip() or "high"
+    _ro = _agent_cfg.setdefault("reasoning_overrides", {})
+    if not isinstance(_ro, dict):
+        _ro = {}
+        _agent_cfg["reasoning_overrides"] = _ro
+    for _m, _eff in zen_effort.items():
+        _ro.setdefault(_m, _eff)
 
     # Auxiliary LLM routes (vision, compression, web-extract) — the background
     # side-jobs Hermes offloads from the main model. Point them at Zen so

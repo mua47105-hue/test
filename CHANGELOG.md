@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.7] - 2026-08-18
+
+### Added / Fixed — corrected context windows + maximum reasoning effort
+
+- **Corrected context windows** (operator-provided, 2026-08-18):
+  `deepseek-v4-flash-free` 200000, `mimo-v2.5-free` 200000, `hy3-free` 190000,
+  `laguna-s-2.1-free` 256000; added the new **`nemotron-3.5-lightning-free`**
+  (262144) to the catalog (7 free models now; `nemotron-3-ultra-free` and
+  `big-pickle` kept at 128000).
+- **Per-model reasoning effort at each model's ceiling** (verified against the
+  live Zen endpoint): `deepseek-v4-flash-free` → `max`, `hy3-free` and
+  `laguna-s-2.1-free` → `high` (they reject `max`), `mimo`/`nemotron` → none.
+  Wired via `agent.reasoning_effort: high` + `agent.reasoning_overrides` and
+  `model_overrides.custom.*` declaring `supports_reasoning`/`supports_vision`,
+  because these ids are unknown to models.dev (which would otherwise default
+  them to reasoning OFF and make the effort config a no-op).
+
 ## [2.0.6] - 2026-08-18
 
 ### Added / Fixed — capability un-blocking
