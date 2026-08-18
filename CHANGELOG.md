@@ -4,6 +4,53 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3-hardened] - 2026-08-18
+
+### Fixed
+
+- **Root cause of the persistent 90-120 s death loop (finally):** the base
+  image's container-boot reconciler (`02-reconcile-profiles` →
+  `container_boot.reconcile_profile_gateways`) auto-starts an
+  s6-supervised `gateway-default` slot on every boot whenever
+  `$HERMES_HOME/gateway_state.json` says `running` — and the running
+  gateway persists exactly that while it serves, so every boot after the
+  first re-created the race. The s6-spawned gateway only sees
+  `/run/s6/container_environment` (never start.sh's runtime exports, and
+  `API_SERVER_KEY` is not an HF secret), so it never opened the 8642
+  api_server port (log signature: `No messaging platforms enabled`, no
+  `API server listening` line), and it raced the direct launch — the
+  double-run guard made start.sh's gateway bow out, the readiness loop
+  timed out, and the container exited 1. Fixes:
+  - New `scripts/99-huggingmes-gateway-owner` cont-init script runs after
+    the base reconciler and downs the `gateway-default` slot plus pins
+    `desired_state: stopped` in `gateway_state.json` — the reconciler
+    honours `desired_state` verbatim, so the slot registers DOWN on every
+    subsequent boot and the env-starved s6 gateway never starts.
+    Mirrors `GATEWAY_TOKEN` into s6's `container_environment` when set.
+  - `start.sh` re-asserts the slot-down + state pin defensively at boot
+    (covers images built without the cont-init script), exports
+    `HERMES_GATEWAY_NO_SUPERVISE=1`, and force-rewrites
+    `API_SERVER_KEY`/`API_SERVER_ENABLED`/`API_SERVER_HOST`/
+    `API_SERVER_PORT` in `$HERMES_HOME/.env` instead of append-if-missing:
+    the gateway loads that persistent file with `override=True`, so a
+    stale/empty `API_SERVER_KEY=` left in the volume from an older deploy
+    silently beat the process env and disabled api_server (a second,
+    independent way to reproduce the same death loop). The deprecated
+    `TERMINAL_CWD` line is dropped from `.env` as well.
+  - `Dockerfile` sets `HERMES_GATEWAY_NO_SUPERVISE=1` in the image ENV and
+    ships the cont-init script.
+- `kanban.max_in_progress` is now written to config.yaml (default 4,
+  `HERMES_KANBAN_MAX_IN_PROGRESS` overrides). The base image derives a
+  default from the SHARED host's `/proc/meminfo` and logged `system memory
+  pressure is critical` every tick on loaded HF hosts, which read like a
+  crash cause in the runtime logs; an explicit value makes dispatch
+  deterministic and silences the warnings.
+
+Verified end-to-end locally: poisoned `.env` + `gateway_state.json=running`
+volume boots healthy (`/health` → `gateway:true`), survives past the old
+120 s death window, and a `docker restart` reconciles to
+`prior_state=stopped action=registered` with the gateway still healthy.
+
 ## [2.0.2-hardened] - 2026-08-18
 
 ### Fixed

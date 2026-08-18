@@ -45,9 +45,17 @@ COPY --chown=hermes:hermes start.sh /opt/huggingmes/start.sh
 COPY --chown=hermes:hermes health-server.js /opt/huggingmes/health-server.js
 COPY --chown=hermes:hermes hermes-sync.py /opt/huggingmes/hermes-sync.py
 
+# Runs after the base image's 02-reconcile-profiles (lexicographic order)
+# and before s6-rc starts user services: downs the auto-started
+# gateway-default slot and pins gateway_state.json to stopped so the s6
+# lifecycle never spawns a second, env-starved gateway that races
+# start.sh's direct launch (see the script header for the full rationale).
+COPY --chown=root:root scripts/99-huggingmes-gateway-owner /etc/cont-init.d/99-huggingmes-gateway-owner
+
 RUN chmod +x \
     /opt/huggingmes/start.sh \
-    /opt/huggingmes/hermes-sync.py
+    /opt/huggingmes/hermes-sync.py \
+    /etc/cont-init.d/99-huggingmes-gateway-owner
 
 # Patch kanban migration: wrap ALTER TABLE ADD COLUMN in try/except so a
 # persisted DB with the column already present doesn't crash the gateway.
@@ -168,6 +176,7 @@ RUN echo 'export PATH="/opt/hermes/.venv/bin:/opt/data/.local/bin:$PATH"' \
 ENV HERMES_HOME=/opt/data \
     HUGGINGMES_APP_DIR=/opt/huggingmes \
     HERMES_AGENT_VERSION=${HERMES_AGENT_VERSION} \
+    HERMES_GATEWAY_NO_SUPERVISE=1 \
     PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
     PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox --disable-gpu"

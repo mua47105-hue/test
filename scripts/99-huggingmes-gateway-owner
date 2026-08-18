@@ -1,0 +1,47 @@
+#!/bin/sh
+# HuggingMes: reclaim gateway ownership from the base image's s6 lifecycle.
+#
+# The base image's 02-reconcile-profiles auto-starts an s6-supervised
+# gateway-default slot whenever /opt/data/gateway_state.json says
+# "running" (the running gateway persists that while it serves). That
+# s6-spawned process only sees /run/s6/container_environment — never the
+# API_SERVER_KEY start.sh generates at runtime — so it can't open the
+# 8642 api_server port, and it races the gateway start.sh launches
+# directly (double-run guard -> restart cap -> container exit 1 -> HF
+# restart loop).
+#
+# This script runs after 02-reconcile-profiles (lexicographic order) and
+# before s6-rc starts user services, so the slot never actually starts a
+# gateway this boot. start.sh re-asserts the same state defensively.
+set -eu
+
+# Note: s6-overlay v3 already runs cont-init.d scripts under
+# with-contenv (container_environment), so the env is present here —
+# no re-exec needed.
+
+SLOT=/run/service/gateway-default
+STATE=/opt/data/gateway_state.json
+
+if [ -d "$SLOT" ] && [ ! -f "$SLOT/down" ]; then
+    echo "[huggingmes] downing base-image s6 gateway slot (start.sh owns the gateway)"
+    /command/s6-svc -d "$SLOT" 2>/dev/null || true
+fi
+
+# Pin the persisted run intent so the next boot's reconciler registers
+# the slot down instead of auto-starting a second, env-starved gateway.
+if [ -f "$STATE" ]; then
+    printf '{"gateway_state":"stopped","desired_state":"stopped","timestamp":%s}\n' "$(date +%s)" > "$STATE"
+    echo "[huggingmes] pinned gateway_state.json to stopped"
+fi
+
+# If a GATEWAY_TOKEN secret exists, mirror it into s6's container
+# environment so any s6-spawned process (named-profile slots, dashboard
+# launchers) inherits a usable api_server key. Start.sh also force-writes
+# these into /opt/data/.env for the ephemeral-key case.
+if [ -n "${GATEWAY_TOKEN:-}" ] && [ -d /run/s6/container_environment ]; then
+    printf '%s' "$GATEWAY_TOKEN" > /run/s6/container_environment/API_SERVER_KEY
+    printf '%s' "${API_SERVER_ENABLED:-true}" > /run/s6/container_environment/API_SERVER_ENABLED
+    printf '%s' "${API_SERVER_HOST:-127.0.0.1}" > /run/s6/container_environment/API_SERVER_HOST
+    printf '%s' "${API_SERVER_PORT:-8642}" > /run/s6/container_environment/API_SERVER_PORT
+    echo "[huggingmes] mirrored GATEWAY_TOKEN into s6 container_environment"
+fi

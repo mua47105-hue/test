@@ -43,14 +43,47 @@ PY
   fi
 fi
 
-# Publish the key into HERMES_HOME/.env as well (idempotent). s6-spawned
-# processes don't inherit start.sh's exported env, so a gateway handed off
-# to the s6 supervisor would otherwise never see API_SERVER_KEY and the
-# api_server platform would never open the 8642 readiness port.
-if ! grep -q "^API_SERVER_KEY=" "$HERMES_HOME/.env" 2>/dev/null; then
-  printf 'API_SERVER_KEY=%s\n' "$API_SERVER_KEY" >> "$HERMES_HOME/.env"
-  chmod 600 "$HERMES_HOME/.env"
+# ── Publish API-server env into HERMES_HOME/.env (force) ──
+# The gateway loads $HERMES_HOME/.env with override=True
+# (hermes_cli/env_loader.py), so a stale API_SERVER_KEY left in this
+# PERSISTENT file (it survives deploys/restarts on HF Spaces) silently
+# beats the process env and leaves the api_server platform unbound → port
+# 8642 never opens → the readiness loop below times out → container exits
+# 1 → HF restart loop. Always rewrite the API-server keys (and drop the
+# deprecated TERMINAL_CWD line) so the file can never poison a boot.
+python3 - "$HERMES_HOME/.env" <<'PY'
+import os, re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+drop = re.compile(r"^(API_SERVER_KEY|API_SERVER_ENABLED|API_SERVER_HOST|API_SERVER_PORT|TERMINAL_CWD)=")
+lines = [ln for ln in text.splitlines() if not drop.match(ln)]
+lines.append(f"API_SERVER_KEY={os.environ['API_SERVER_KEY']}")
+lines.append(f"API_SERVER_ENABLED={os.environ.get('API_SERVER_ENABLED', 'true')}")
+lines.append(f"API_SERVER_HOST={os.environ.get('API_SERVER_HOST', '127.0.0.1')}")
+lines.append(f"API_SERVER_PORT={os.environ.get('API_SERVER_PORT', '8642')}")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+path.chmod(0o600)
+PY
+
+# Best-effort: mirror the same keys into s6's container_environment so any
+# future s6-spawned process (named-profile slots, dashboard launchers)
+# inherits them too. start.sh may lack the privileges to write there
+# (root-owned tmpfs); the .env force-write above is the authoritative fix.
+if [ -d /run/s6/container_environment ]; then
+  for _k in API_SERVER_KEY API_SERVER_ENABLED API_SERVER_HOST API_SERVER_PORT; do
+    _v="$(printenv "$_k" 2>/dev/null || true)"
+    [ -n "$_v" ] || continue
+    (umask 077; printf '%s' "$_v" > "/run/s6/container_environment/$_k") 2>/dev/null || true
+  done
 fi
+
+# Keep any `hermes gateway run` invocation (dashboard restart button,
+# terminal commands) in-process instead of handing it to s6-supervise,
+# which would drop the env start.sh exported.
+export HERMES_GATEWAY_NO_SUPERVISE=1
 
 # ── Setup directories ──
 mkdir -p "$HERMES_HOME"/{cron,sessions,logs,hooks,memories,skills,skins,plans,workspace,home,plugins}
@@ -251,6 +284,17 @@ if custom_base and model_name:
         pass
 
 config.setdefault("terminal", {}).setdefault("cwd", os.environ.get("MESSAGING_CWD", str(home / "workspace")))
+# Explicit kanban concurrency cap: the base image derives a default from
+# the SHARED host's /proc/meminfo and warns "system memory pressure is
+# critical" every tick when that host is loaded (HF sandbox hosts are),
+# which reads like a crash cause in the runtime logs. An explicit value
+# makes dispatch deterministic and silences the warnings.
+try:
+    config.setdefault("kanban", {}).setdefault(
+        "max_in_progress", int(os.environ.get("HERMES_KANBAN_MAX_IN_PROGRESS", "4"))
+    )
+except ValueError:
+    pass
 config.setdefault("compression", {}).setdefault("enabled", True)
 config.setdefault("display", {}).setdefault("background_process_notifications", os.environ.get("HERMES_BACKGROUND_NOTIFICATIONS", "result"))
 config.setdefault("security", {}).setdefault("redact_secrets", True)
@@ -638,6 +682,33 @@ start_background_sync_once() {
 
 # start_dashboard_once  # DISABLED TO SAVE RAM — the image's own s6 dashboard
 # service already binds DASHBOARD_PORT; Discord/API remain the access paths.
+
+# ── Reclaim gateway ownership from the base image's s6 lifecycle ──
+# 02-reconcile-profiles auto-starts an s6-supervised gateway-default slot
+# whenever /opt/data/gateway_state.json says "running" (the running
+# gateway persists that while it serves). That s6-spawned gateway only
+# sees container_environment — never the API_SERVER_KEY start.sh
+# generates — so it never opens 8642, and it races the direct launch
+# below (the double-run guard makes ours bow out → restart cap →
+# container exit 1 → HF restart loop). Down the slot (kills any s6
+# gateway) and pin the persisted intent to stopped so the next boot
+# registers the slot down as well. The image's own cont-init script
+# (99-huggingmes-gateway-owner) does this earlier in the boot; this
+# re-asserts it defensively.
+SLOT=/run/service/gateway-default
+if [ -d "$SLOT" ] && [ ! -f "$SLOT/down" ]; then
+  echo "Downing base-image s6 gateway slot (start.sh owns the gateway)..."
+  /command/s6-svc -d "$SLOT" 2>/dev/null || true
+  for _i in $(seq 1 15); do
+    pgrep -f 'gateway\.run' >/dev/null 2>&1 || break
+    sleep 1
+  done
+fi
+if [ -f "$HERMES_HOME/gateway_state.json" ]; then
+  printf '{"gateway_state":"stopped","desired_state":"stopped","timestamp":%s}\n' "$(date +%s)" > "$HERMES_HOME/gateway_state.json"
+  echo "Pinned gateway_state.json to stopped (no s6 gateway auto-start next boot)."
+fi
+unset SLOT
 
 # ── Gateway restart loop ──
 GATEWAY_RESTART_DELAY="${GATEWAY_RESTART_DELAY:-5}"
