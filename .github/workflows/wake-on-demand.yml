@@ -1,0 +1,55 @@
+# Wake-on-Demand trigger for the HuggingMes Space.
+#
+# Hugging Face Spaces sleep when idle and start on the first incoming
+# request. This workflow exists ONLY to send that single wake request at a
+# moment you choose — it never runs on a schedule, so the Space is never
+# pinged repeatedly. Intended usage: at most ~once per day, or purely
+# on-demand when you want the agent online (e.g. before an interactive
+# Discord session).
+#
+# Triggers:
+#   * workflow_dispatch — run it manually from the GitHub UI / `gh workflow run`.
+#   * repository_dispatch — fired by any webhook that POSTs a
+#     `wake-on-demand` type event to this repo's GitHub API
+#     (e.g. a Discord webhook relay, a home-assistant automation, a
+#     scheduler on YOUR device). The webhook just calls:
+#       POST https://api.github.com/repos/<owner>/<repo>/dispatches
+#       { "event_type": "wake-on-demand" }
+#     with a repo-scoped token. This keeps all automation external to the
+#     Space itself.
+#
+# Result: exactly one outbound GET to the Space root; the Space boots, and
+# its dashboard reports readiness. No repeat pings, no cron.
+
+name: Wake-on-Demand
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [wake-on-demand]
+
+jobs:
+  wake:
+    name: Send single wake request
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Wake the Space (one request only)
+        env:
+          SPACE_URL: ${{ vars.HF_SPACE_URL }}
+        run: |
+          if [ -z "$SPACE_URL" ]; then
+            echo "::error::Set the repository variable HF_SPACE_URL to your Space URL (e.g. https://<user>-<space>.hf.space)"
+            exit 1
+          fi
+          echo "Waking ${SPACE_URL}"
+          code="$(curl -sS -m 90 -L -o /dev/null -w '%{http_code}' "$SPACE_URL/")"
+          echo "Wake request finished with HTTP ${code}"
+          # The dashboard URL is the same server; expect 200 (or a redirect
+          # from the Spaces routing layer, which curl -L already followed).
+          if [ "$code" = "200" ]; then
+            echo "Space is up."
+          else
+            echo "Space returned ${code}; check logs. The Space may still be booting."
+            exit 0  # never treat a slow boot as a workflow failure — waking is best-effort
+          fi

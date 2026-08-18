@@ -1,0 +1,65 @@
+# ============================================================================
+# HuggingMes Zen gateway configuration (example / template)
+# ----------------------------------------------------------------------------
+# This is a TEMPLATE for wiring Hermes to the OpenCode Zen endpoint
+# (https://opencode.ai/zen/v1) as an OpenAI-compatible model backend.
+#
+# HOW TO USE
+#   The HuggingMes startup flow builds config.yaml from environment variables
+#   (see .env.example: LLM_MODEL / CUSTOM_BASE_URL / CUSTOM_API_KEY /
+#   CUSTOM_MODEL_CONTEXT_LENGTH). Those env vars cover base_url, api_key and
+#   context_length. The providers block below additionally pins client
+#   identification headers for the endpoint. To apply it, merge the
+#   `providers:` section into the generated config.yaml (or start from this
+#   file when hand-writing config).
+#
+# IMPORTANT
+#   - api_key is a literal placeholder. Supply the value the gateway expects
+#     (via CUSTOM_API_KEY env or HF Space secret). Never hard-code a real key.
+#   - extra_headers: the Zen endpoint answers plain HTTP/1.1 clients without
+#     any special headers (verified 2026-08-17: GET /zen/v1/models returns
+#     200 with a default curl User-Agent). The headers below mirror the
+#     official client's identification and are optional; keep them only if
+#     you want Hermes to present the same client identity to the endpoint.
+#     You are responsible for confirming legitimate access to any
+#     third-party endpoint you connect to.
+#   - context_length values below are explicit (so Hermes never probes the
+#     remote endpoint, which would be pointless and noisy). They default to
+#     131072 (128K tokens), the standard window for these model families.
+#     Tune per model if completions report context overflow (lower) or you
+#     know the provider's published window (raise). No probing happens —
+#     the local-server detection routines return early for remote URLs.
+# ============================================================================
+
+providers:
+  custom:                                  # key matches model.provider ("custom")
+    base_url: https://opencode.ai/zen/v1
+    api_key: "placeholder"                 # ← replace via env / secret, never inline
+    extra_headers:
+      Authorization: ""
+      User-Agent: "opencode/1.18.18 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
+
+# Model catalog for the Zen gateway — all models verified present on
+# https://opencode.ai/zen/v1/models (2026-08-17, 62 models listed).
+# The ACTIVE model is selected via LLM_MODEL + CUSTOM_MODEL_CONTEXT_LENGTH
+# env; the catalog below documents the known Zen free/regular model ids and
+# their explicit context lengths for reference.
+model:
+  default: deepseek-v4-flash-free
+  provider: custom
+  base_url: https://opencode.ai/zen/v1
+  api_key: "placeholder"
+  context_length: 131072        # explicit — no remote probing
+  # Catalog (id → context_length, explicit, user-tunable):
+  #   deepseek-v4-flash-free     131072
+  #   nemotron-3-ultra-free      131072
+  #   mimo-v2.5-free             131072
+  #   hy3-free                   131072
+  #   laguna-s-2.1-free          131072
+  #   big-pickle                 131072
+  #
+  # Switch models by setting, e.g.:
+  #   LLM_MODEL=nemotron-3-ultra-free
+  #   CUSTOM_MODEL_CONTEXT_LENGTH=131072
+  #   CUSTOM_BASE_URL=https://opencode.ai/zen/v1
+  #   CUSTOM_API_KEY=<your key>

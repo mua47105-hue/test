@@ -1,0 +1,23 @@
+services:
+  huggingmes:
+    build:
+      context: .
+      args:
+        HERMES_AGENT_VERSION: ${HERMES_AGENT_VERSION:-latest}
+    image: huggingmes:local
+    ports:
+      - "7861:7861"
+    environment:
+      LLM_MODEL: ${LLM_MODEL:-openrouter/anthropic/claude-sonnet-4}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-local-dev-token}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      SPACE_HOST: ${SPACE_HOST:-localhost:7861}
+      DEV_MODE: ${DEV_MODE:-true}
+    volumes:
+      - huggingmes-data:/opt/data
+
+volumes:
+  huggingmes-data:
