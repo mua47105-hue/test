@@ -39,7 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
         huggingface_hub \
-        hf_transfer
+        hf_transfer \
+        ddgs
 
 COPY --chown=hermes:hermes start.sh /opt/huggingmes/start.sh
 COPY --chown=hermes:hermes health-server.js /opt/huggingmes/health-server.js
@@ -184,7 +185,9 @@ ENV HERMES_HOME=/opt/data \
     PYTHONUNBUFFERED=1 \
     MALLOC_ARENA_MAX=2 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
-    PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox --disable-gpu"
+    PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox --disable-gpu" \
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
+    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage"
 
 EXPOSE 7861
 

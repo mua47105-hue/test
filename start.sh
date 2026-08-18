@@ -319,6 +319,15 @@ else:
     model["context_length"] = zen_models["deepseek-v4-flash-free"]
     model["max_tokens"] = 8192
     model["discover_models"] = False
+    # Top-level headers the AUXILIARY client merges onto its own requests
+    # (agent/auxiliary_client._apply_user_default_headers reads
+    # model.default_headers / model.extra_headers). Without these, vision /
+    # compression / web-extract calls to Zen would send the default
+    # Bearer + OpenAI User-Agent and get 401/429 from Zen.
+    model["extra_headers"] = {
+        "Authorization": "",
+        "User-Agent": zen_ua,
+    }
 
     # Newer keyed schema — this is where the HTTP client lifts the headers
     # (runtime_provider._lift_extra_headers).
@@ -353,6 +362,30 @@ else:
             "User-Agent": zen_ua,
         },
     }]
+
+    # Auxiliary LLM routes (vision, compression, web-extract) — the background
+    # side-jobs Hermes offloads from the main model. Point them at Zen so
+    # "no auxiliary LLM provider configured" goes away and vision can use the
+    # multimodal mimo-v2.5-free. setdefault: an operator's explicit config wins.
+    aux = config.setdefault("auxiliary", {})
+    if not isinstance(aux, dict):
+        aux = {}
+        config["auxiliary"] = aux
+    aux_routes = {
+        "vision": "mimo-v2.5-free",       # multimodal model on Zen (image input)
+        "compression": "deepseek-v4-flash-free",  # fast/cheap summarisation
+        "web_extract": "deepseek-v4-flash-free",  # page summarisation
+    }
+    for _task, _aux_model in aux_routes.items():
+        _task_cfg = aux.setdefault(_task, {})
+        if not isinstance(_task_cfg, dict):
+            _task_cfg = {}
+            aux[_task] = _task_cfg
+        _task_cfg.setdefault("provider", "custom")
+        _task_cfg.setdefault("base_url", zen_url)
+        _task_cfg.setdefault("api_key", "placeholder")
+        _task_cfg.setdefault("model", _aux_model)
+
     print("No LLM_MODEL/HERMES_MODEL set; injected the Zen fallback catalog (6 models, deepseek-v4-flash-free default).")
 
 custom_base = os.environ.get("CUSTOM_BASE_URL", "").strip()
@@ -381,6 +414,35 @@ except ValueError:
 config.setdefault("compression", {}).setdefault("enabled", True)
 config.setdefault("display", {}).setdefault("background_process_notifications", os.environ.get("HERMES_BACKGROUND_NOTIFICATIONS", "result"))
 config.setdefault("security", {}).setdefault("redact_secrets", True)
+
+# Deeper subagent nesting: Hermes defaults max_spawn_depth=1 (flat only).
+# 2 lets an orchestrator spawn leaf subagents — the "can't spawn chains of
+# subagents deeper than one level" limitation. Respect HERMES_MAX_SPAWN_DEPTH.
+try:
+    config.setdefault("delegation", {}).setdefault(
+        "max_spawn_depth", int(os.environ.get("HERMES_MAX_SPAWN_DEPTH", "2"))
+    )
+except ValueError:
+    pass
+
+# Web search: ddgs (DuckDuckGo) is the keyless/free backend, installed at
+# build time. Only set when the operator hasn't chosen a key-based backend.
+_web_cfg = config.setdefault("web", {})
+if not isinstance(_web_cfg, dict):
+    _web_cfg = {}
+    config["web"] = _web_cfg
+if not str(_web_cfg.get("search_backend", "")).strip():
+    _web_cfg["search_backend"] = "ddgs"
+
+# Browser: force the built-in (agent-browser + local Chromium) tools rather
+# than the browser-use/uvx auto path, which downloads a heavy stack at
+# runtime and is fragile in a root container. Deterministic on HF.
+_browser_cfg = config.setdefault("browser", {})
+if not isinstance(_browser_cfg, dict):
+    _browser_cfg = {}
+    config["browser"] = _browser_cfg
+if not str(_browser_cfg.get("backend", "")).strip():
+    _browser_cfg["backend"] = "off"
 
 platforms = config["platforms"]
 

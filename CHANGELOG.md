@@ -4,6 +4,32 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.6] - 2026-08-18
+
+### Added / Fixed — capability un-blocking
+
+- **Auxiliary LLM routes wired to Zen** (fixes Hermes's "no auxiliary LLM
+  provider configured" + "cannot read images"). config-gen now writes
+  `auxiliary.vision` → `mimo-v2.5-free` (the multimodal model), and
+  `auxiliary.compression` / `auxiliary.web_extract` → `deepseek-v4-flash-free`,
+  each as `provider: custom` + Zen `base_url` + `placeholder` key.
+- **Top-level `model.extra_headers`** (empty `Authorization` + OpenCode
+  `User-Agent`) so auxiliary calls merge the same Zen headers the main
+  client uses — otherwise vision/compression would send a default Bearer +
+  OpenAI UA and get 401/429 from Zen (verified via
+  `resolve_vision_provider_client`: base_url Zen, model mimo, headers correct).
+- **Web search re-enabled for free**: `ddgs` (DuckDuckGo, keyless) installed
+  at build time and `web.search_backend: ddgs` set when no key-based backend
+  is configured. Live search verified in-container.
+- **Deeper subagent nesting**: `delegation.max_spawn_depth` raised 1→2
+  (overridable via `HERMES_MAX_SPAWN_DEPTH`), un-blocking orchestrator→leaf
+  chains.
+- **Browser determinism**: `browser.backend` forced to built-in (agent-browser)
+  tools instead of the browser-use/uvx auto path, plus `AGENT_BROWSER_ARGS`
+  (`--no-sandbox,--disable-dev-shm-usage`) and `AGENT_BROWSER_EXECUTABLE_PATH`
+  (`/usr/bin/chromium`) so local Chromium starts reliably in the root
+  container with the 64MB `/dev/shm`.
+
 ## [2.0.5-hardened] - 2026-08-18
 
 ### Added / Fixed
